@@ -444,13 +444,25 @@ merge dev`]
 
     const render = async () => {
         if (rendering) return;
-        const src = code.value.trim();
+        let src = code.value.trim();
         error.classList.remove('show');
         success.classList.remove('show');
-        
+
         if (!src) {
             output.innerHTML = '<span class="empty">コードを入力してください</span>';
             return;
+        }
+
+        // <br/>タグを改行に自動変換（SVGエラー防止）
+        const hasBrTags = /<br\s*\/?>/gi.test(src);
+        if (hasBrTags) {
+            src = src.replace(/<br\s*\/?>/gi, '\n');
+            msg('success', '<br/>タグを改行に自動変換しました');
+            // コードエディタも更新
+            setTimeout(() => {
+                code.value = src;
+                save();
+            }, 100);
         }
 
         rendering = true;
@@ -461,7 +473,7 @@ merge dev`]
             const { svg } = await mermaid.render('m' + Date.now(), src);
             output.innerHTML = svg;
             applyZoom();
-            msg('success', '完了');
+            if (!hasBrTags) msg('success', '完了');
         } catch (e) {
             msg('error', e.message || 'エラー');
             output.innerHTML = '<span class="empty">表示できません</span>';
@@ -504,8 +516,24 @@ merge dev`]
         if (!svg) return msg('error', '図がありません');
         const clone = svg.cloneNode(true);
         clone.removeAttribute('style');
-        download(new Blob([clone.outerHTML], { type: 'image/svg+xml' }), `diagram-${Date.now()}.svg`);
-        msg('success', 'SVG保存完了');
+
+        // HTMLタグを完全にクリーンアップ（SVGエラー防止）
+        const foreignObjects = clone.querySelectorAll('foreignObject');
+        foreignObjects.forEach(fo => {
+            const text = fo.textContent || '';
+            const textElement = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            textElement.textContent = text;
+            fo.parentNode?.replaceChild(textElement, fo);
+        });
+
+        // <br>タグなどのHTMLタグを削除
+        let svgText = clone.outerHTML;
+        svgText = svgText.replace(/<br\s*\/?>/gi, '\n');
+        svgText = svgText.replace(/<\/?span[^>]*>/gi, '');
+        svgText = svgText.replace(/<\/?div[^>]*>/gi, '');
+
+        download(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), `diagram-${Date.now()}.svg`);
+        msg('success', 'SVG保存完了（クリーン版）');
     };
 
     $('pngBtn').onclick = () => {
@@ -513,25 +541,38 @@ merge dev`]
         if (!svg) return msg('error', '図がありません');
         const clone = svg.cloneNode(true);
         clone.removeAttribute('style');
-        const data = new XMLSerializer().serializeToString(clone);
+
+        // SVGデータをクリーンアップ
+        let data = new XMLSerializer().serializeToString(clone);
+        data = data.replace(/<br\s*\/?>/gi, '');
+
         const rect = svg.getBoundingClientRect();
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d', { alpha: false });
-        const scale = 12;
+        const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false });
+
+        // 超高解像度（16倍）で鮮明なPNGを生成
+        const scale = 16;
         canvas.width = rect.width * scale;
         canvas.height = rect.height * scale;
+
         const img = new Image();
         img.onload = () => {
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
-            ctx.fillStyle = '#fff';
+            ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
             canvas.toBlob(b => {
-                download(b, `diagram-${Date.now()}.png`);
-                msg('success', 'PNG保存完了（12倍解像度）');
+                if (b) {
+                    download(b, `diagram-${Date.now()}.png`);
+                    msg('success', 'PNG保存完了（16倍超高解像度）');
+                } else {
+                    msg('error', 'PNG生成に失敗しました');
+                }
             }, 'image/png', 1.0);
         };
+        img.onerror = () => msg('error', 'PNG生成に失敗しました');
         img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(data)));
     };
 
