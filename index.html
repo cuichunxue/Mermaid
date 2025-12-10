@@ -489,13 +489,51 @@ merge dev`]
         if (svg) svg.style.transform = `scale(${zoom})`;
     };
 
-    const download = (blob, name) => {
+    // モバイル判定
+    const isMobile = () => {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+               (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+    };
+
+    // スマホ対応のダウンロード関数
+    const download = async (blob, name) => {
+        // Web Share API対応（スマホで共有機能を使用）
+        if (isMobile() && navigator.share && navigator.canShare) {
+            try {
+                const file = new File([blob], name, { type: blob.type });
+                if (navigator.canShare({ files: [file] })) {
+                    await navigator.share({
+                        files: [file],
+                        title: 'Mermaid図',
+                        text: name
+                    });
+                    msg('success', 'ファイルを共有しました');
+                    return;
+                }
+            } catch (e) {
+                // 共有がキャンセルされた場合は通常のダウンロードにフォールバック
+                if (e.name !== 'AbortError') {
+                    console.log('共有失敗、ダウンロードにフォールバック:', e);
+                }
+            }
+        }
+
+        // 通常のダウンロード（デスクトップ + モバイル対応）
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = name;
+        a.style.display = 'none';
+
+        // iOS Safari対応：documentに追加してからクリック
+        document.body.appendChild(a);
         a.click();
-        URL.revokeObjectURL(url);
+
+        // クリーンアップを遅延実行（モバイル対応）
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
     };
 
     $('renderBtn').onclick = render;
@@ -511,7 +549,7 @@ merge dev`]
     $('zoomOut').onclick = () => { zoom = Math.max(0.2, zoom - 0.1); applyZoom(); };
     $('zoomReset').onclick = () => { zoom = 1; applyZoom(); };
 
-    $('svgBtn').onclick = () => {
+    $('svgBtn').onclick = async () => {
         const svg = output.querySelector('svg');
         if (!svg) return msg('error', '図がありません');
         const clone = svg.cloneNode(true);
@@ -532,11 +570,13 @@ merge dev`]
         svgText = svgText.replace(/<\/?span[^>]*>/gi, '');
         svgText = svgText.replace(/<\/?div[^>]*>/gi, '');
 
-        download(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), `diagram-${Date.now()}.svg`);
-        msg('success', 'SVG保存完了（クリーン版）');
+        await download(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), `diagram-${Date.now()}.svg`);
+        if (!isMobile() || !navigator.share) {
+            msg('success', 'SVG保存完了（クリーン版）');
+        }
     };
 
-    $('pngBtn').onclick = () => {
+    $('pngBtn').onclick = async () => {
         const svg = output.querySelector('svg');
         if (!svg) return msg('error', '図がありません');
         const clone = svg.cloneNode(true);
@@ -556,17 +596,19 @@ merge dev`]
         canvas.height = rect.height * scale;
 
         const img = new Image();
-        img.onload = () => {
+        img.onload = async () => {
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-            canvas.toBlob(b => {
+            canvas.toBlob(async (b) => {
                 if (b) {
-                    download(b, `diagram-${Date.now()}.png`);
-                    msg('success', 'PNG保存完了（16倍超高解像度）');
+                    await download(b, `diagram-${Date.now()}.png`);
+                    if (!isMobile() || !navigator.share) {
+                        msg('success', 'PNG保存完了（16倍超高解像度）');
+                    }
                 } else {
                     msg('error', 'PNG生成に失敗しました');
                 }
