@@ -453,11 +453,35 @@ merge dev`]
             return;
         }
 
-        // <br/>タグを改行に自動変換（SVGエラー防止）
+        let modified = false;
+
+        // シーケンス図のNote内の<br/>タグを複数のNote行に分割
+        if (src.includes('sequenceDiagram')) {
+            const noteRegex = /(Note\s+(?:over|left of|right of)\s+[^:]+):\s*([^\n]+)/g;
+            src = src.replace(noteRegex, (match, notePrefix, noteContent) => {
+                if (/<br\s*\/?>/i.test(noteContent)) {
+                    modified = true;
+                    // <br/>で分割して複数のNote行を生成
+                    const lines = noteContent.split(/<br\s*\/?>/i);
+                    return lines
+                        .map(line => line.trim())
+                        .filter(line => line.length > 0)
+                        .map(line => `${notePrefix}: ${line}`)
+                        .join('\n    ');
+                }
+                return match;
+            });
+        }
+
+        // 通常の<br/>タグを改行に自動変換（flowchart等）
         const hasBrTags = /<br\s*\/?>/gi.test(src);
-        if (hasBrTags) {
+        if (hasBrTags && !src.includes('sequenceDiagram')) {
             src = src.replace(/<br\s*\/?>/gi, '\n    ');
-            msg('success', '<br/>タグを改行に自動変換しました');
+            modified = true;
+        }
+
+        if (modified) {
+            msg('success', '<br/>タグを自動変換しました');
             // コードエディタも更新
             setTimeout(() => {
                 code.value = src;
@@ -473,7 +497,7 @@ merge dev`]
             const { svg } = await mermaid.render('m' + Date.now(), src);
             output.innerHTML = svg;
             applyZoom();
-            if (!hasBrTags) msg('success', '完了');
+            if (!modified) msg('success', '完了');
         } catch (e) {
             const errorMsg = e.message || 'エラー';
             console.error('Mermaid rendering error:', e);
