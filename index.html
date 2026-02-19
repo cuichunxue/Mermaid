@@ -9,7 +9,6 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
-```
     body {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         background: #f5f5f5;
@@ -284,7 +283,6 @@
         }
     }
 </style>
-```
 
 </head>
 <body>
@@ -296,7 +294,6 @@
         </div>
     </header>
 
-```
 <main class="main">
     <section class="editor-section">
         <div class="toolbar">
@@ -411,7 +408,13 @@ merge dev`]
         startOnLoad: false,
         theme: 'neutral',
         securityLevel: 'loose',
-        fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif'
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif',
+        fontSize: 18,
+        flowchart: {
+            htmlLabels: false,
+            curve: 'basis',
+            padding: 20
+        }
     });
 
     // テンプレートボタン生成
@@ -441,13 +444,49 @@ merge dev`]
 
     const render = async () => {
         if (rendering) return;
-        const src = code.value.trim();
+        let src = code.value.trim();
         error.classList.remove('show');
         success.classList.remove('show');
-        
+
         if (!src) {
             output.innerHTML = '<span class="empty">コードを入力してください</span>';
             return;
+        }
+
+        let modified = false;
+
+        // シーケンス図のNote内の<br/>タグを複数のNote行に分割
+        if (src.includes('sequenceDiagram')) {
+            const noteRegex = /(Note\s+(?:over|left of|right of)\s+[^:]+):\s*([^\n]+)/g;
+            src = src.replace(noteRegex, (match, notePrefix, noteContent) => {
+                if (/<br\s*\/?>/i.test(noteContent)) {
+                    modified = true;
+                    // <br/>で分割して複数のNote行を生成
+                    const lines = noteContent.split(/<br\s*\/?>/i);
+                    return lines
+                        .map(line => line.trim())
+                        .filter(line => line.length > 0)
+                        .map(line => `${notePrefix}: ${line}`)
+                        .join('\n    ');
+                }
+                return match;
+            });
+        }
+
+        // 通常の<br/>タグを改行に自動変換（flowchart等）
+        const hasBrTags = /<br\s*\/?>/gi.test(src);
+        if (hasBrTags && !src.includes('sequenceDiagram')) {
+            src = src.replace(/<br\s*\/?>/gi, '\n    ');
+            modified = true;
+        }
+
+        if (modified) {
+            msg('success', '<br/>タグを自動変換しました');
+            // コードエディタも更新
+            setTimeout(() => {
+                code.value = src;
+                save();
+            }, 100);
         }
 
         rendering = true;
@@ -458,10 +497,12 @@ merge dev`]
             const { svg } = await mermaid.render('m' + Date.now(), src);
             output.innerHTML = svg;
             applyZoom();
-            msg('success', '完了');
+            if (!modified) msg('success', '完了');
         } catch (e) {
-            msg('error', e.message || 'エラー');
-            output.innerHTML = '<span class="empty">表示できません</span>';
+            const errorMsg = e.message || 'エラー';
+            console.error('Mermaid rendering error:', e);
+            msg('error', `構文エラー: ${errorMsg}`);
+            output.innerHTML = `<span class="empty">構文エラーが発生しました。<br/>コードを確認してください。<br/><small>${errorMsg}</small></span>`;
         } finally {
             loading.classList.remove('show');
             rendering = false;
@@ -474,13 +515,75 @@ merge dev`]
         if (svg) svg.style.transform = `scale(${zoom})`;
     };
 
-    const download = (blob, name) => {
+    // モバイル判定
+    const isMobile = () => {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+               (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+    };
+
+    // スマホ対応のダウンロード関数
+    const download = async (blob, name) => {
+        // Web Share API対応（スマホで共有機能を使用）
+        if (isMobile() && navigator.share) {
+            try {
+                const file = new File([blob], name, { type: blob.type });
+                // navigator.canShareが存在しない場合もある（古いiOS）
+                const canShare = !navigator.canShare || navigator.canShare({ files: [file] });
+
+                if (canShare) {
+                    await navigator.share({
+                        files: [file],
+                        title: 'Mermaid図',
+                        text: name
+                    });
+                    msg('success', 'ファイルを共有しました');
+                    return;
+                }
+            } catch (e) {
+                // 共有がキャンセルされた場合、またはエラーの場合
+                if (e.name === 'AbortError') {
+                    // ユーザーがキャンセルした場合は何もしない
+                    return;
+                }
+                console.log('共有失敗、ダウンロードにフォールバック:', e);
+                // その他のエラーの場合はフォールバック
+            }
+        }
+
+        // 通常のダウンロード（デスクトップ + モバイル対応）
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = name;
-        a.click();
-        URL.revokeObjectURL(url);
+        a.style.display = 'none';
+
+        // iOS Safari対応：documentに追加してからクリック
+        document.body.appendChild(a);
+
+        // iOS対応：タッチイベントをシミュレート
+        if (isMobile()) {
+            const event = new MouseEvent('click', {
+                view: window,
+                bubbles: true,
+                cancelable: true
+            });
+            a.dispatchEvent(event);
+        } else {
+            a.click();
+        }
+
+        // クリーンアップを遅延実行（モバイル対応）
+        setTimeout(() => {
+            if (document.body.contains(a)) {
+                document.body.removeChild(a);
+            }
+            URL.revokeObjectURL(url);
+        }, 200);
+
+        // モバイルの場合は成功メッセージを表示
+        if (isMobile()) {
+            msg('success', 'ダウンロード開始（ブラウザの設定を確認してください）');
+        }
     };
 
     $('renderBtn').onclick = render;
@@ -496,37 +599,72 @@ merge dev`]
     $('zoomOut').onclick = () => { zoom = Math.max(0.2, zoom - 0.1); applyZoom(); };
     $('zoomReset').onclick = () => { zoom = 1; applyZoom(); };
 
-    $('svgBtn').onclick = () => {
+    $('svgBtn').onclick = async () => {
         const svg = output.querySelector('svg');
         if (!svg) return msg('error', '図がありません');
         const clone = svg.cloneNode(true);
         clone.removeAttribute('style');
-        download(new Blob([clone.outerHTML], { type: 'image/svg+xml' }), `diagram-${Date.now()}.svg`);
-        msg('success', 'SVG保存完了');
+
+        // HTMLタグを完全にクリーンアップ（SVGエラー防止）
+        const foreignObjects = clone.querySelectorAll('foreignObject');
+        foreignObjects.forEach(fo => {
+            const text = fo.textContent || '';
+            const textElement = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            textElement.textContent = text;
+            fo.parentNode?.replaceChild(textElement, fo);
+        });
+
+        // <br>タグなどのHTMLタグを削除
+        let svgText = clone.outerHTML;
+        svgText = svgText.replace(/<br\s*\/?>/gi, '\n');
+        svgText = svgText.replace(/<\/?span[^>]*>/gi, '');
+        svgText = svgText.replace(/<\/?div[^>]*>/gi, '');
+
+        await download(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), `diagram-${Date.now()}.svg`);
+        if (!isMobile() || !navigator.share) {
+            msg('success', 'SVG保存完了（クリーン版）');
+        }
     };
 
-    $('pngBtn').onclick = () => {
+    $('pngBtn').onclick = async () => {
         const svg = output.querySelector('svg');
         if (!svg) return msg('error', '図がありません');
         const clone = svg.cloneNode(true);
         clone.removeAttribute('style');
-        const data = new XMLSerializer().serializeToString(clone);
+
+        // SVGデータをクリーンアップ
+        let data = new XMLSerializer().serializeToString(clone);
+        data = data.replace(/<br\s*\/?>/gi, '');
+
         const rect = svg.getBoundingClientRect();
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        const scale = 4;
+        const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false });
+
+        // 超高解像度（16倍）で鮮明なPNGを生成
+        const scale = 16;
         canvas.width = rect.width * scale;
         canvas.height = rect.height * scale;
+
         const img = new Image();
-        img.onload = () => {
-            ctx.fillStyle = '#fff';
+        img.onload = async () => {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            canvas.toBlob(b => {
-                download(b, `diagram-${Date.now()}.png`);
-                msg('success', 'PNG保存完了');
-            });
+
+            canvas.toBlob(async (b) => {
+                if (b) {
+                    await download(b, `diagram-${Date.now()}.png`);
+                    if (!isMobile() || !navigator.share) {
+                        msg('success', 'PNG保存完了（16倍超高解像度）');
+                    }
+                } else {
+                    msg('error', 'PNG生成に失敗しました');
+                }
+            }, 'image/png', 1.0);
         };
+        img.onerror = () => msg('error', 'PNG生成に失敗しました');
         img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(data)));
     };
 
@@ -553,7 +691,6 @@ merge dev`]
     render();
 })();
 </script>
-```
 
 </body>
 </html>
